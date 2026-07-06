@@ -1,24 +1,29 @@
 import asyncio
 import logging
 import os
-from dotenv import load_dotenv
+from html import escape
+from urllib.parse import quote
 
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "otdel_chudes_bot")
 DELETE_WELCOME_AFTER_SECONDS = int(os.getenv("DELETE_WELCOME_AFTER_SECONDS", "600"))
 
 if not BOT_TOKEN:
-    raise RuntimeError("Не найден BOT_TOKEN. Создай файл .env и вставь туда токен бота.")
+    raise RuntimeError("Не найден BOT_TOKEN. Добавь BOT_TOKEN в Variables на Railway.")
 
 router = Router()
 
-WELCOME_TEXT = """🌙 Добро пожаловать в «Личный отдел чудес», {name}!
+WELCOME_TEXT = """🌙 Добро пожаловать в «Личный отдел чудес», {mention}!
 
 Рады видеть тебя в нашем пространстве.
 
@@ -42,11 +47,14 @@ RULES_TEXT = """🌙 ПРАВИЛА ЧАТА
 
 На этом всё. Общайтесь, знакомьтесь и чувствуйте себя свободно 🌙"""
 
-rules_keyboard = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="📜 Правила чата", callback_data="show_rules")]
-    ]
-)
+
+def rules_keyboard() -> InlineKeyboardMarkup:
+    deep_link = f"https://t.me/{BOT_USERNAME}?start=rules"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📜 Правила чата", url=deep_link)]
+        ]
+    )
 
 
 async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int) -> None:
@@ -59,14 +67,24 @@ async def delete_later(bot: Bot, chat_id: int, message_id: int, delay: int) -> N
 
 @router.message(CommandStart())
 async def start_command(message: Message) -> None:
+    text = message.text or ""
+    if "rules" in text:
+        await message.answer(RULES_TEXT)
+        return
+
     await message.answer(
-        "Привет 🌙 Я Хранитель чудес. Добавь меня администратором в чат, чтобы я встречал новых участников и удалял системные уведомления."
+        "Привет 🌙 Я Хранитель чудес. Добавь меня администратором в чат, чтобы я встречал новых участников и удалял системные уведомления.\n\n"
+        "Чтобы посмотреть правила чата, нажми /rules"
     )
+
+
+@router.message(Command("rules"))
+async def rules_command(message: Message) -> None:
+    await message.answer(RULES_TEXT)
 
 
 @router.message(F.new_chat_members)
 async def welcome_new_members(message: Message, bot: Bot) -> None:
-    # Удаляем системное уведомление о вступлении в чат
     try:
         await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
     except (TelegramBadRequest, TelegramForbiddenError):
@@ -76,11 +94,13 @@ async def welcome_new_members(message: Message, bot: Bot) -> None:
         if member.is_bot:
             continue
 
-        name = member.first_name or "новый участник"
+        safe_name = escape(member.first_name or "новый участник")
+        mention = f'<a href="tg://user?id={member.id}">{safe_name}</a>'
+
         welcome = await bot.send_message(
             chat_id=message.chat.id,
-            text=WELCOME_TEXT.format(name=name),
-            reply_markup=rules_keyboard,
+            text=WELCOME_TEXT.format(mention=mention),
+            reply_markup=rules_keyboard(),
         )
 
         asyncio.create_task(
@@ -93,14 +113,12 @@ async def welcome_new_members(message: Message, bot: Bot) -> None:
         )
 
 
-@router.callback_query(F.data == "show_rules")
-async def show_rules(callback: CallbackQuery) -> None:
-    await callback.answer(RULES_TEXT, show_alert=True)
-
-
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(
+        token=BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dp = Dispatcher()
     dp.include_router(router)
 
